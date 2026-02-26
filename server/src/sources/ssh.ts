@@ -22,15 +22,37 @@ export class SSHClient {
     const privateKey = await this.readPrivateKey();
     return new Promise((resolve, reject) => {
       this.client = new Client();
-      this.client.on('ready', () => resolve());
-      this.client.on('error', (err) => reject(err));
-      this.client.connect({
+      
+      const connectionOptions = {
         host: this.config.host,
         port: this.config.port || 22,
         username: this.config.username || process.env.USER,
         password: this.config.password,
         privateKey,
+        readyTimeout: 20000, // Increase timeout
+        debug: (message: string) => {
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[SSH DEBUG]', message);
+          }
+        },
+        keepaliveInterval: 10000,
+        keepaliveCountMax: 5
+      };
+
+      console.log(`[SSH] Attempting to connect to ${connectionOptions.host}:${connectionOptions.port} as ${connectionOptions.username}...`);
+      if (connectionOptions.password) console.log('[SSH] Offering password authentication.');
+      if (connectionOptions.privateKey) console.log('[SSH] Offering private key authentication.');
+      
+      this.client.on('ready', () => {
+        console.log(`[SSH] Connection successful for ${connectionOptions.username}`);
+        resolve()
       });
+      this.client.on('error', (err) => {
+        console.error(`[SSH] Connection error:`, err);
+        reject(err)
+      });
+      
+      this.client.connect(connectionOptions);
     });
   }
 
@@ -92,17 +114,20 @@ export async function getSSHClient(source: Source): Promise<SSHClient> {
   
   if (clients.has(key)) {
     const client = clients.get(key)!;
-    if (client.client?.readable) {
-        return client;
+    // Test with a lightweight stat call
+    try {
+      await client.stat(source.basePath || '/');
+      return client;
+    } catch {
+      clients.delete(key);
     }
-    clients.delete(key);
   }
 
   const client = new SSHClient({
     host: source.host,
-    port: source.port,
-    username: source.username,
-    password: source.password,
+    port: source.port ?? undefined,
+    username: source.username ?? undefined,
+    password: source.password ?? undefined,
     basePath: source.basePath,
   });
 

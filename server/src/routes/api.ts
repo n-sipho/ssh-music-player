@@ -8,6 +8,11 @@ import { streamTrack } from '../stream/index.js';
 import { SourceSchema, TrackSchema } from '../types/index.js';
 
 export async function registerRoutes(app: FastifyInstance) {
+  app.setErrorHandler((error, request, reply) => {
+    app.log.error(error);
+    reply.status(500).send({ error: 'Internal Server Error', message: error.message });
+  });
+
   // ============ Sources ============
   
   app.get('/api/sources', async (req, reply) => {
@@ -220,7 +225,7 @@ export async function registerRoutes(app: FastifyInstance) {
     return prisma.playlist.findMany({
       include: { _count: { select: { items: true } } },
       orderBy: { name: 'asc' },
-    }).then(pls => pls.map(p => ({ id: p.id, name: p.name, trackCount: p._count.items })));
+    }).then(pls => pls.map((p: any) => ({ id: p.id, name: p.name, trackCount: p._count.items })));
   });
 
   app.post('/api/playlists', async (req, reply) => {
@@ -246,11 +251,10 @@ export async function registerRoutes(app: FastifyInstance) {
     });
     if (!playlist) return reply.code(404).send({ error: 'Playlist not found' });
     
-    // Flatten the items to just tracks with position
     return {
       id: playlist.id,
       name: playlist.name,
-      tracks: playlist.items.map(item => ({
+      tracks: playlist.items.map((item: any) => ({
         ...item.track,
         position: item.position
       }))

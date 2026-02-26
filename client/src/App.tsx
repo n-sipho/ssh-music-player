@@ -13,8 +13,19 @@ import Settings from './pages/Settings';
 
 function App() {
   useEffect(() => {
-    // Trigger a scan when the app is opened
-    sourcesApi.scanAll().catch(err => console.error('Initial scan failed:', err));
+    // Trigger a scan when the app is opened, only if there are sources
+    const initialScan = async () => {
+      try {
+        const res = await sourcesApi.getAll();
+        const hasEnabledSources = res.data.some(s => s.enabled);
+        if (hasEnabledSources) {
+          await sourcesApi.scanAll();
+        }
+      } catch (err) {
+        console.error('Initial scan check failed:', err);
+      }
+    };
+    initialScan();
   }, []);
 
   return (

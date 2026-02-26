@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { sourcesApi } from '../api';
-import type { Source } from '../store/player';
+import { usePlayer, type Source } from '../store/player';
 import { formatDistanceToNow } from 'date-fns';
 
 interface SourceStatus {
@@ -38,6 +38,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<Source> | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const { clearTracksBySource } = usePlayer();
   const [testResult, setTestResult] = useState<{ id: string; success: boolean; message?: string } | null>(null);
   const [scanningAll, setScanningAll] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -121,6 +122,7 @@ export default function Settings() {
     if (!confirm('Permanently remove this source and all its music from the library?')) return;
     try {
       await sourcesApi.delete(id);
+      clearTracksBySource(id);
       loadSources();
     } catch (err) {
       console.error('Delete failed:', err);

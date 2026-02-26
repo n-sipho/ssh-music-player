@@ -2,6 +2,8 @@ import SMB2 from 'smb2';
 import { Readable } from 'stream';
 import type { Source } from '../types/index.js';
 
+type SMB2Client = any; // Type alias for smb2 module
+
 export interface SMBConfig {
   host: string;
   share: string;
@@ -12,7 +14,7 @@ export interface SMBConfig {
 
 export class SMBClient {
   private config: SMBConfig;
-  private client: SMB2 | null = null;
+  private client: SMB2Client | null = null;
 
   constructor(config: SMBConfig) {
     this.config = config;
@@ -28,7 +30,7 @@ export class SMBClient {
 
     // Test connection by listing root
     return new Promise((resolve, reject) => {
-      this.client!.readdir(this.config.basePath || '\\', (err) => {
+      this.client!.readdir(this.config.basePath || '\\', (err: any) => {
         if (err) reject(err);
         else resolve();
       });
@@ -46,9 +48,9 @@ export class SMBClient {
         return reject(new Error('Not connected'));
       }
 
-      this.client.readdir(path, (err, files) => {
+      this.client.readdir(path, (err: any, files: any[]) => {
         if (err) return reject(err);
-        resolve(files.map(f => f.name || f.toString()).filter(n => n !== '.' && n !== '..'));
+        resolve(files.map((f: any) => f.name || f.toString()).filter((n: string) => n !== '.' && n !== '..'));
       });
     });
   }
@@ -59,7 +61,7 @@ export class SMBClient {
         return reject(new Error('Not connected'));
       }
 
-      this.client.stat(path, (err, stats) => {
+      this.client.stat(path, (err: any, stats: any) => {
         if (err) return reject(err);
         resolve({
           size: stats.size,
@@ -116,8 +118,8 @@ export async function getSMBClient(source: Source): Promise<SMBClient> {
   const client = new SMBClient({
     host: source.host,
     share: source.share || '',
-    username: source.username,
-    password: source.password,
+    username: source.username ?? undefined,
+    password: source.password ?? undefined,
     basePath: source.basePath,
   });
 
