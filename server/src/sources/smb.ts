@@ -9,6 +9,7 @@ export interface SMBConfig {
   share: string;
   username?: string;
   password?: string;
+  domain?: string;
   basePath?: string;
 }
 
@@ -21,18 +22,31 @@ export class SMBClient {
   }
 
   async connect(): Promise<void> {
+    const domain = this.config.domain || '';
+    const username = this.config.username || 'guest';
+    const share = `\\\\${this.config.host}\\${this.config.share}`;
+    
+    console.log(`[SMB] Attempting connection to ${share} as ${domain ? domain + '\\' : ''}${username}`);
+
     this.client = new SMB2({
-      share: `\\\\${this.config.host}\\${this.config.share}`,
-      domain: '.',
-      username: this.config.username || 'guest',
+      share,
+      domain,
+      username,
       password: this.config.password || '',
+      // Higher timeout for discovery
+      autoClose: false
     });
 
     // Test connection by listing root
     return new Promise((resolve, reject) => {
       this.client!.readdir(this.config.basePath || '\\', (err: any) => {
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          console.error(`[SMB] Connection failed: ${err.message}`);
+          reject(err);
+        } else {
+          console.log(`[SMB] Connected successfully to ${this.config.share}`);
+          resolve();
+        }
       });
     });
   }
@@ -120,6 +134,7 @@ export async function getSMBClient(source: Source): Promise<SMBClient> {
     share: source.share || '',
     username: source.username ?? undefined,
     password: source.password ?? undefined,
+    domain: source.domain ?? undefined,
     basePath: source.basePath,
   });
 

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { basename } from 'path';
+import { execFile } from 'child_process';
 import prisma from '../db/index.js';
 import { getTracksWithInfo, searchTracks, getAlbums, getArtists } from '../db/index.js';
 import { scanSource } from '../scanner/index.js';
@@ -111,6 +112,28 @@ export async function registerRoutes(app: FastifyInstance) {
   });
 
   // Test source connection
+  app.post('/api/sources/test', async (req, reply) => {
+    const source = req.body as any;
+    if (!source || !source.type || !source.host) {
+      return reply.code(400).send({ error: 'Incomplete source configuration' });
+    }
+
+    try {
+      if (source.type === 'ssh') {
+        const { getSftpClient } = await import('../sources/ssh.js');
+        const client = await getSftpClient(source as any);
+        if (client && typeof client.end === 'function') client.end();
+      } else if (source.type === 'smb') {
+        const { getSMBClient } = await import('../sources/smb.js');
+        await getSMBClient(source as any);
+      }
+      return { success: true, message: 'Connection successful' };
+    } catch (err: any) {
+      return reply.code(200).send({ success: false, message: err.message });
+    }
+  });
+
+  // Test source connection by ID (for existing sources)
   app.post('/api/sources/:id/test', async (req, reply) => {
     const { id } = req.params as { id: string };
     
@@ -143,6 +166,74 @@ export async function registerRoutes(app: FastifyInstance) {
 
   app.get('/api/discover', async () => {
     return discoveryManager.getDiscoveredServices();
+  });
+
+  app.post('/api/smb/enumerate-shares', async (req, reply) => {
+    const { host, username, password, domain } = req.body as any;
+    if (!host || !username) return reply.code(400).send({ error: 'Host and Username are required' });
+
+    // Use empty string as default domain if not provided
+    const smbDomain = domain || '';
+    // If no domain, just use username, otherwise use domain\username
+    const userPart = smbDomain ? `${smbDomain}\\${username}` : username;
+    const userArg = `${userPart}%${password || ''}`;
+
+    return new Promise((resolve, reject) => {
+      console.log(`[Enumerate] Listing shares on //${host} for user ${userPart}`);
+      // smbclient -L //host -U [domain\]user%password -m SMB3
+      execFile('smbclient', ['-L', `//${host}`, '-U', userArg, '-m', 'SMB3'], (error, stdout, stderr) => {
+        if (error) {
+          const errString = stderr || error.message;
+          
+          // If smbclient is not installed, we should not fail with 500. 
+          // Instead return empty list so user can enter share manually.
+          if ((error as any).code === 'ENOENT' || errString.includes('not found')) {
+            console.warn('smbclient not found, falling back to manual share entry');
+            return resolve(reply.code(200).send([]));
+          }
+
+          if (errString.includes('NT_STATUS_LOGON_FAILURE')) {
+            return resolve(reply.code(401).send({ error: 'Logon failure: Check username and password' }));
+          }
+          if (errString.includes('NT_STATUS_ACCESS_DENIED')) {
+            return resolve(reply.code(403).send({ error: 'Access denied: User does not have permissions to list shares' }));
+          }
+          
+          return resolve(reply.code(500).send({ error: 'Failed to list shares', details: errString }));
+        }
+
+        // Parse stdout
+        const lines = stdout.split('\n');
+        const shares: string[] = [];
+        const ignoredShares = ['IPC$', 'print$', 'ADMIN$', 'C$', 'D$', 'E$'];
+
+        let parsingShares = false;
+        for (const line of lines) {
+          if (line.includes('Sharename') && line.includes('Type')) {
+            parsingShares = true;
+            continue;
+          }
+          if (parsingShares && line.includes('---------')) continue;
+          if (parsingShares && line.trim() === '') {
+            parsingShares = false;
+            break;
+          }
+
+          if (parsingShares) {
+            // Regex to extract share name (starts with spaces/tabs, then word, then more spaces then "Disk")
+            const match = line.match(/^\s*([a-zA-Z0-9_$ .-]+)\s+Disk/i);
+            if (match) {
+              const shareName = match[1].trim();
+              if (!ignoredShares.includes(shareName)) {
+                shares.push(shareName);
+              }
+            }
+          }
+        }
+
+        resolve(shares);
+      });
+    });
   });
 
   // ============ Tracks, Albums, etc. ============
