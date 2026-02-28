@@ -15,6 +15,7 @@ model Source {
   port      Int?
   username  String?
   password  String?
+  domain    String?       @default(".")
   share     String?
   basePath  String        @default("/")
   enabled   Boolean       @default(true)
@@ -80,6 +81,7 @@ model Track {
   source      Source   @relation(fields: [sourceId], references: [id])
   album       Album?   @relation(fields: [albumId], references: [id])
   artist      Artist?  @relation(fields: [artistId], references: [id])
+  playlists   PlaylistItem[]
 
   @@unique([sourceId, path])
 }
@@ -98,4 +100,5 @@ model PlaylistItem {
   position   Int
   addedAt    DateTime @default(now())
   playlist   Playlist @relation(fields: [playlistId], references: [id])
+  track      Track    @relation(fields: [trackId], references: [id])
 }

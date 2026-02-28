@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "NODE_OPTIONS=--openssl-legacy-provider tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "NODE_OPTIONS=--openssl-legacy-provider node dist/index.js"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

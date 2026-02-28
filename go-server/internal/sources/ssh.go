@@ -2,7 +2,6 @@ package sources
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"time"
 
@@ -70,6 +69,6 @@ func (c *SSHClient) ReadDir(path string) ([]os.FileInfo, error) {
 	return c.sftpClient.ReadDir(path)
 }
 
-func (c *SSHClient) Open(path string) (io.ReadCloser, error) {
+func (c *SSHClient) Open(path string) (*sftp.File, error) {
 	return c.sftpClient.Open(path)
 }

@@ -4,15 +4,20 @@ import { type Track } from '../store/player';
 import TrackList from '../components/TrackList';
 import { Library as LibraryIcon } from 'lucide-react';
 
-export default function Library() {
+export default function Library({ hasSources }: { hasSources: boolean | null }) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [filtered, setFiltered] = useState<Track[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadTracks();
-  }, []);
+    if (hasSources === null) return;
+    if (hasSources) {
+      loadTracks();
+    } else {
+      setLoading(false);
+    }
+  }, [hasSources]);
 
   useEffect(() => {
     if (search) {

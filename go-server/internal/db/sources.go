@@ -12,7 +12,7 @@ func GetAllSources() ([]types.Source, error) {
 	}
 	defer rows.Close()
 
-	var sources []types.Source
+	sources := []types.Source{} // Initialize as empty slice, not nil
 	for rows.Next() {
 		var s types.Source
 		err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Host, &s.Port, &s.Username, &s.Password, &s.Domain, &s.Share, &s.BasePath, &s.Enabled, &s.CreatedAt, &s.UpdatedAt)

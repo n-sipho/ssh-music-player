@@ -12,7 +12,7 @@ interface PlaylistDetail extends Playlist {
   tracks: (Track & { position: number })[];
 }
 
-export default function Playlists() {
+export default function Playlists({ hasSources }: { hasSources: boolean | null }) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [selected, setSelected] = useState<PlaylistDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -20,7 +20,14 @@ export default function Playlists() {
   const [newName, setNewName] = useState('');
   const { playTrack } = usePlayer();
 
-  useEffect(() => { loadPlaylists(); }, []);
+  useEffect(() => { 
+    if (hasSources === null) return;
+    if (hasSources) {
+      loadPlaylists(); 
+    } else {
+      setLoading(false);
+    }
+  }, [hasSources]);
 
   const loadPlaylists = async () => {
     try {

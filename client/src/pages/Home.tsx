@@ -4,15 +4,20 @@ import { type Track, type Source } from '../store/player';
 import TrackList from '../components/TrackList';
 import { Home as HomeIcon, Radio, Music, Lock, Folder } from 'lucide-react';
 
-export default function Home() {
+export default function Home({ hasSources }: { hasSources: boolean | null }) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState<string | null>(null);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (hasSources === null) return; // Wait for initial check
+    if (hasSources) {
+      loadData();
+    } else {
+      setLoading(false);
+    }
+  }, [hasSources]);
 
   const loadData = async () => {
     try {

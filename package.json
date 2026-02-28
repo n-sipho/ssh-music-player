@@ -9,7 +9,9 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "npm run dev -w server",
+    "dev:go": "cd go-server && ~/go/bin/air",
+    "dev:react": "npm run dev -w client",
+    "dev:server": "cd go-server && ~/go/bin/air",
     "dev:client": "npm run dev -w client",
     "build": "npm run build -w server && npm run build -w client",
     "start": "npm run start -w server"

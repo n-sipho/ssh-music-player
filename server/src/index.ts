@@ -46,14 +46,16 @@ async function startServer() {
 
     // --- Background Sync Engine ---
     const startBackgroundSync = async () => {
-      console.log('--- Background Sync Started ---');
       try {
         const sources = await prisma.source.findMany({ where: { enabled: true } });
-        for (const source of sources) {
-          console.log(`Syncing: ${source.name}`);
-          await scanSource(source as any);
+        if (sources.length > 0) {
+          console.log('--- Background Sync Started ---');
+          for (const source of sources) {
+            console.log(`Syncing: ${source.name}`);
+            await scanSource(source as any);
+          }
+          console.log('--- Sync Completed ---');
         }
-        console.log('--- Sync Completed ---');
       } catch (err) {
         console.error('Background sync failed:', err);
       }

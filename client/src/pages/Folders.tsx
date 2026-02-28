@@ -15,14 +15,19 @@ interface FolderDetail extends Folder {
   tracks: Track[];
 }
 
-export default function Folders() {
+export default function Folders({ hasSources }: { hasSources: boolean | null }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<FolderDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadFolders();
-  }, []);
+    if (hasSources === null) return;
+    if (hasSources) {
+      loadFolders();
+    } else {
+      setLoading(false);
+    }
+  }, [hasSources]);
 
   const loadFolders = async () => {
     try {

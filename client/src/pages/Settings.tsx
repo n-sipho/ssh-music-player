@@ -37,12 +37,14 @@ export default function Settings() {
   const [sources, setSources] = useState<SourceWithStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<Source> | null>(null);
+  const [wizardStep, setWizardStep] = useState(1); // 1: Credentials, 2: Share & Path
   const [testing, setTesting] = useState<string | null>(null);
-  const { clearTracksBySource } = usePlayer();
-  const [testResult, setTestResult] = useState<{ id: string; success: boolean; message?: string } | null>(null);
+  const { clearTracksBySource, showNotification } = usePlayer();
   const [scanningAll, setScanningAll] = useState(false);
   const [saving, setSaving] = useState(false);
   const [discoveredServices, setDiscoveredServices] = useState<any[]>([]);
+  const [discoveredShares, setDiscoveredShares] = useState<string[]>([]);
+  const [isEnumerating, setIsEnumerating] = useState(false);
 
   const loadSources = useCallback(async () => {
     try {
@@ -57,21 +59,37 @@ export default function Settings() {
 
   useEffect(() => { loadSources(); }, [loadSources]);
 
-  // Poll for discovery
+  const resetWizard = (source: Partial<Source> | null = null) => {
+    setEditing(source);
+    setWizardStep(1);
+    setDiscoveredShares([]);
+  };
+
+  // Poll for discovery - keep it at 10s and stop after 5 empty results to save resources
   useEffect(() => {
+    let emptyCount = 0;
     const fetchDiscovery = async () => {
       try {
         const res = await sourcesApi.discover();
         setDiscoveredServices(res.data);
+        if (res.data.length === 0) emptyCount++;
+        else emptyCount = 0;
       } catch { /* ignore */ }
     };
+    
     fetchDiscovery();
-    const interval = setInterval(fetchDiscovery, 5000);
+    const interval = setInterval(() => {
+      if (emptyCount < 5) fetchDiscovery();
+    }, 10000);
+    
     return () => clearInterval(interval);
   }, []);
 
-  // Real-time UI polling
+  // Real-time UI polling - only when a source is actually scanning
   useEffect(() => {
+    const anyScanning = sources.some(s => s.status?.status === 'scanning');
+    if (!anyScanning) return;
+
     const interval = setInterval(async () => {
       try {
         const res = await sourcesApi.getAll();
@@ -80,7 +98,7 @@ export default function Settings() {
     }, 4000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [sources]);
   
   const saveSource = async () => {
     if (!editing) return;
@@ -94,6 +112,7 @@ export default function Settings() {
         port: editing.port,
         username: editing.username,
         password: editing.password,
+        domain: editing.domain,
         share: editing.share,
         basePath: editing.basePath,
         enabled: editing.enabled,
@@ -101,8 +120,10 @@ export default function Settings() {
 
       if (editing.id) {
         await sourcesApi.update(editing.id, dataToSave);
+        showNotification('Source updated successfully', 'success');
       } else {
         await sourcesApi.create(dataToSave);
+        showNotification('New source added', 'success');
       }
       setEditing(null);
       loadSources();
@@ -112,7 +133,7 @@ export default function Settings() {
       const message = Array.isArray(details) 
         ? details.map((d: any) => `${d.path.join('.')}: ${d.message}`).join(', ')
         : (typeof details === 'string' ? details : err.message);
-      alert(`Save failed: ${message}`);
+      showNotification(`Save failed: ${message}`, 'error');
     } finally {
       setSaving(false);
     }
@@ -123,22 +144,72 @@ export default function Settings() {
     try {
       await sourcesApi.delete(id);
       clearTracksBySource(id);
+      showNotification('Source removed', 'success');
       loadSources();
     } catch (err) {
       console.error('Delete failed:', err);
+      showNotification('Failed to remove source', 'error');
     }
   };
 
   const testSource = async (id: string) => {
     setTesting(id);
-    setTestResult(null);
     try {
-      const res = await sourcesApi.test(id);
-      setTestResult({ id, ...res.data });
+      // If we're in the middle of editing (especially a new source), test with the local state
+      const sourceToTest = (editing && (editing.id === id || id === 'temp')) ? editing : id;
+      const res = await sourcesApi.test(sourceToTest);
+      if (res.data.success) {
+        showNotification('Connection successful', 'success');
+      } else {
+        showNotification(`Connection failed: ${res.data.message}`, 'error');
+      }
     } catch (err: any) {
-      setTestResult({ id, success: false, message: err.response?.data?.error || err.message });
+      showNotification(`Test failed: ${err.response?.data?.error || err.message}`, 'error');
     } finally {
       setTesting(null);
+    }
+  };
+
+  const handleContinue = async () => {
+    if (!editing?.host || !editing?.username || !editing?.password) {
+      showNotification('Host, Username and Password are required', 'error');
+      return;
+    }
+
+    if (editing.type === 'ssh') {
+      setWizardStep(2);
+      return;
+    }
+
+    // SMB - Enumerate shares
+    setIsEnumerating(true);
+    try {
+      const res = await sourcesApi.enumerateShares({
+        host: editing.host,
+        username: editing.username || '',
+        password: editing.password || '',
+        domain: editing.domain || '.',
+      });
+      
+      const shares = res.data;
+      setDiscoveredShares(shares);
+      
+      if (shares.length === 0) {
+        showNotification('Authenticated, but no shared folders were found.', 'info');
+      } else if (shares.length === 1) {
+        setEditing({ ...editing, share: shares[0] });
+        showNotification(`Found and selected share: "${shares[0]}"`, 'success');
+      } else {
+        showNotification(`Discovered ${shares.length} shared folders.`, 'info');
+      }
+      
+      setWizardStep(2);
+    } catch (err: any) {
+      console.error('Enumerate failed:', err);
+      const msg = err.response?.data?.error || 'Failed to list shares on the server.';
+      showNotification(msg, 'error');
+    } finally {
+      setIsEnumerating(false);
     }
   };
 
@@ -146,9 +217,11 @@ export default function Settings() {
     setScanningAll(true);
     try {
       await sourcesApi.scanAll();
+      showNotification('Library scan started', 'info');
       loadSources();
     } catch (err) {
       console.error('Scan all failed:', err);
+      showNotification('Failed to start scan', 'error');
     } finally {
       setTimeout(() => setScanningAll(false), 2000);
     }
@@ -178,7 +251,7 @@ export default function Settings() {
                   {scanningAll ? 'Starting Scan...' : 'Scan for Music'}
                 </button>
                 <button 
-                  onClick={() => setEditing({ type: 'ssh', basePath: '/', enabled: true })} 
+                  onClick={() => resetWizard({ type: 'smb', basePath: '/', enabled: true })} 
                   className="px-6 py-2 bg-spotify-green text-black font-bold rounded-full hover:scale-105 transition-transform"
                 >
                   Add Source
@@ -208,13 +281,8 @@ export default function Settings() {
                       </div>
                       
                       <div className="flex items-center gap-2 shrink-0">
-                        {testResult?.id === source.id && (
-                          <span className={`text-xs font-bold mr-2 ${testResult.success ? 'text-green-400' : 'text-red-400'}`}>
-                            {testResult.success ? '✓ Ready' : `✗ ${testResult.message}`}
-                          </span>
-                        )}
                         <button onClick={() => testSource(source.id)} disabled={testing === source.id} className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 text-white font-bold rounded-md transition-colors">
-                          Test
+                          {testing === source.id ? 'Testing...' : 'Test'}
                         </button>
                         <button onClick={() => setEditing(source)} className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 text-white font-bold rounded-md transition-colors">
                           Edit
@@ -264,7 +332,7 @@ export default function Settings() {
                     </div>
                     <div className="flex gap-2">
                       <button 
-                        onClick={() => setEditing({
+                        onClick={() => resetWizard({
                           name: service.name,
                           type: service.type,
                           host: service.addresses[0] || service.host,
@@ -293,95 +361,175 @@ export default function Settings() {
       </div>
 
       {editing && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => setEditing(null)}>
-          <div className="bg-spotify-dark border border-white/10 rounded-2xl p-8 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="text-2xl font-bold mb-6 text-white">{editing.id ? 'Edit' : 'Add'} Source</h3>
-            
-            {!editing.id && discoveredServices.length > 0 && (
-              <div className="mb-6">
-                <label className="block text-[10px] font-bold text-spotify-green uppercase tracking-widest mb-2 ml-1">📡 Use Discovered Device</label>
-                <select 
-                  className="w-full px-4 py-3 bg-white/10 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all appearance-none cursor-pointer"
-                  onChange={(e) => {
-                    const service = discoveredServices.find(s => s.name === e.target.value);
-                    if (service) {
-                      setEditing({
-                        ...editing,
-                        name: service.name,
-                        type: service.type,
-                        host: service.addresses[0] || service.host,
-                        port: service.port,
-                      });
-                    }
-                  }}
-                  defaultValue=""
-                >
-                  <option value="" disabled>Select a device to pre-fill...</option>
-                  {discoveredServices.map((service, idx) => (
-                    <option key={idx} value={service.name} className="bg-spotify-dark">
-                      {service.name} ({service.type.toUpperCase()} • {service.host})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="space-y-5">
-              <div>
-                <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Friendly Name</label>
-                <input value={editing.name || ''} onChange={e => setEditing({ ...editing, name: e.target.value })} placeholder="My Music" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Protocol</label>
-                  <select value={editing.type} onChange={e => setEditing({ ...editing, type: e.target.value as 'ssh' | 'smb' })} className="w-full px-4 py-3 bg-white/5 border border-white/10 outline-none rounded-lg text-white text-sm transition-colors">
-                    <option value="ssh">SSH / SFTP</option>
-                    <option value="smb">SMB / Windows</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Host IP</label>
-                  <input value={editing.host || ''} onChange={e => setEditing({ ...editing, host: e.target.value })} placeholder="192.168.10.55" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Port (Optional)</label>
-                <input type="number" value={editing.port || ''} onChange={e => setEditing({ ...editing, port: parseInt(e.target.value) || undefined })} placeholder={editing.type === 'ssh' ? '22' : '445'} className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Username</label>
-                  <input value={editing.username || ''} onChange={e => setEditing({ ...editing, username: e.target.value })} placeholder="user" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Password</label>
-                  <input type="password" value={editing.password || ''} onChange={e => setEditing({ ...editing, password: e.target.value })} placeholder="••••••••" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">Music Path</label>
-                <input value={editing.basePath || '/'} onChange={e => setEditing({ ...editing, basePath: e.target.value })} placeholder="/home/thabiso/Music" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-              </div>
-              {editing.type === 'smb' && (
-                <div>
-                  <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2 ml-1">SMB Share Name</label>
-                  <input value={editing.share || ''} onChange={e => setEditing({ ...editing, share: e.target.value })} placeholder="Music" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
-                </div>
-              )}
-              <div className="flex items-center gap-3 pt-2 ml-1">
-                <input type="checkbox" id="source-enabled" checked={editing.enabled} onChange={e => setEditing({ ...editing, enabled: e.target.checked })} className="w-5 h-5 accent-spotify-green" />
-                <label htmlFor="source-enabled" className="text-xs font-bold text-white uppercase tracking-widest cursor-pointer">Auto-sync this source</label>
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => resetWizard(null)}>
+          <div className="bg-spotify-dark border border-white/10 rounded-2xl p-6 w-full max-w-xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold text-white">
+                {editing.id ? 'Edit' : 'Connect to'} {editing.type === 'smb' ? 'Server' : 'SSH'}
+              </h3>
+              <div className="flex gap-2 text-[10px] font-bold uppercase tracking-widest">
+                <span className={wizardStep === 1 ? 'text-spotify-green' : 'text-spotify-gray opacity-30'}>1. Auth</span>
+                <span className="text-spotify-gray opacity-30">→</span>
+                <span className={wizardStep === 2 ? 'text-spotify-green' : 'text-spotify-gray opacity-30'}>2. Share</span>
               </div>
             </div>
-            <div className="flex justify-end gap-3 mt-10">
-              <button onClick={() => setEditing(null)} disabled={saving} className="px-6 py-2 text-xs text-spotify-gray hover:text-white font-bold uppercase transition-colors disabled:opacity-50">Cancel</button>
-              <button 
-                onClick={saveSource} 
-                disabled={saving}
-                className="px-10 py-3 bg-spotify-green text-black rounded-full font-bold uppercase text-xs hover:scale-105 transition-transform shadow-xl disabled:opacity-50 disabled:scale-100"
-              >
-                {saving ? 'Saving...' : 'Save Source'}
-              </button>
+            
+            <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+              {wizardStep === 1 ? (
+                <div className="space-y-6">
+                  {!editing.id && discoveredServices.length > 0 && (
+                    <div className="bg-spotify-green/5 border border-spotify-green/20 rounded-xl p-3">
+                      <label className="block text-[10px] font-bold text-spotify-green uppercase tracking-widest mb-2 ml-1">📡 Use Discovered Device</label>
+                      <select 
+                        className="w-full px-3 py-2 bg-black/40 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all appearance-none cursor-pointer"
+                        onChange={(e) => {
+                          const service = discoveredServices.find(s => s.name === e.target.value);
+                          if (service) {
+                            setEditing({
+                              ...editing,
+                              name: service.name,
+                              type: service.type,
+                              host: service.addresses[0] || service.host,
+                              port: service.port,
+                            });
+                          }
+                        }}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>Select a device to pre-fill...</option>
+                        {discoveredServices.map((service, idx) => (
+                          <option key={idx} value={service.name} className="bg-spotify-dark">
+                            {service.name} ({service.type.toUpperCase()} • {service.host})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-1.5 ml-1">Friendly Name</label>
+                        <input value={editing.name || ''} onChange={e => setEditing({ ...editing, name: e.target.value })} placeholder="My Source" className="w-full px-3 py-2 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-1.5 ml-1">Host IP / Hostname</label>
+                        <input value={editing.host || ''} onChange={e => setEditing({ ...editing, host: e.target.value })} placeholder="192.168.1.100" className="w-full px-3 py-2 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
+                      </div>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-1.5 ml-1">Username</label>
+                        <input value={editing.username || ''} onChange={e => setEditing({ ...editing, username: e.target.value })} placeholder="user" className="w-full px-3 py-2 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-1.5 ml-1">Password</label>
+                        <input type="password" value={editing.password || ''} onChange={e => setEditing({ ...editing, password: e.target.value })} placeholder="••••••••" className="w-full px-3 py-2 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
+                      </div>
+                    </div>
+                  </div>
+                  {editing.type === 'smb' && (
+                    <div className="p-4 bg-white/5 border border-white/5 rounded-xl">
+                      <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2">Domain (Optional)</label>
+                      <input value={editing.domain || ''} onChange={e => setEditing({ ...editing, domain: e.target.value })} placeholder="." className="w-full px-3 py-2 bg-black/20 border border-white/10 outline-none rounded-lg text-white text-sm transition-all" />
+                      <p className="text-[10px] text-spotify-gray mt-2 italic opacity-50">Most home setups use "." or "WORKGROUP". If using a Mac, the username is usually your Account Name (short name).</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+                   <div className="p-4 bg-spotify-green/5 border border-spotify-green/20 rounded-xl mb-4">
+                     <p className="text-xs text-white mb-1 font-medium">Logged in to <span className="text-spotify-green">{editing.host}</span></p>
+                     <p className="text-[10px] text-spotify-gray uppercase tracking-wider font-bold opacity-60">Now select your shared music folder.</p>
+                   </div>
+
+                   <div className="space-y-5">
+                      {editing.type === 'smb' && (
+                        <div>
+                          <label className="block text-[10px] font-bold text-spotify-green uppercase tracking-widest mb-2 flex justify-between">
+                            <span>SMB Share Name</span>
+                            {discoveredShares.length > 0 && <span className="text-[9px] text-spotify-green">Discovered {discoveredShares.length} shares</span>}
+                          </label>
+                          
+                          {discoveredShares.length > 0 ? (
+                            <select 
+                              value={editing.share || ''} 
+                              onChange={e => setEditing({ ...editing, share: e.target.value })}
+                              className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all appearance-none cursor-pointer"
+                            >
+                              <option value="" disabled>Select a share...</option>
+                              {discoveredShares.map(s => <option key={s} value={s}>{s}</option>)}
+                              <option value="custom">── Enter manually ──</option>
+                            </select>
+                          ) : (
+                            <input 
+                              value={editing.share || ''} 
+                              onChange={e => setEditing({ ...editing, share: e.target.value })} 
+                              placeholder="e.g. Music, Public, Shared" 
+                              className="w-full px-4 py-3 bg-white/5 border border-yellow-500/30 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" 
+                            />
+                          )}
+
+                          {editing.share === 'custom' && (
+                            <input 
+                              autoFocus
+                              placeholder="Enter custom share name..."
+                              className="w-full mt-2 px-4 py-3 bg-black/40 border border-spotify-green/50 outline-none rounded-lg text-white text-sm"
+                              onChange={e => setEditing({ ...editing, share: e.target.value })}
+                            />
+                          )}
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-[10px] font-bold text-spotify-gray uppercase tracking-widest mb-2">Music Root Path</label>
+                        <input value={editing.basePath || '/'} onChange={e => setEditing({ ...editing, basePath: e.target.value })} placeholder="/home/user/Music" className="w-full px-4 py-3 bg-white/5 border border-white/10 focus:border-spotify-green outline-none rounded-lg text-white text-sm transition-all" />
+                      </div>
+                   </div>
+
+                   <div className="flex items-center gap-3 pt-4 border-t border-white/5">
+                      <input type="checkbox" id="source-enabled" checked={editing.enabled} onChange={e => setEditing({ ...editing, enabled: e.target.checked })} className="w-5 h-5 accent-spotify-green cursor-pointer" />
+                      <label htmlFor="source-enabled" className="text-[10px] font-bold text-white uppercase tracking-widest cursor-pointer select-none">Auto-sync library from this source</label>
+                   </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between items-center mt-8 pt-4 border-t border-white/5">
+              <div className="flex gap-3">
+                <button onClick={() => resetWizard(null)} disabled={saving} className="px-6 py-2 text-xs text-spotify-gray hover:text-white font-bold uppercase transition-colors disabled:opacity-50">Cancel</button>
+                {wizardStep === 2 && (
+                  <button onClick={() => setWizardStep(1)} className="px-4 py-2 text-xs text-white/60 hover:text-white font-bold uppercase transition-colors flex items-center gap-2">← Back</button>
+                )}
+              </div>
+              
+              <div className="flex gap-3">
+                {wizardStep === 1 ? (
+                  <button 
+                    onClick={handleContinue}
+                    disabled={isEnumerating}
+                    className="px-8 py-2.5 bg-spotify-green text-black rounded-full font-bold uppercase text-xs hover:scale-105 transition-transform shadow-xl disabled:opacity-50"
+                  >
+                    {isEnumerating ? 'Connecting...' : 'Continue'}
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => testSource(editing.id || 'temp')} 
+                      disabled={testing === (editing.id || 'temp')}
+                      className="px-6 py-2.5 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-full transition-all"
+                    >
+                      {testing === (editing.id || 'temp') ? 'Testing...' : 'Test Connection'}
+                    </button>
+                    <button 
+                      onClick={saveSource} 
+                      disabled={saving}
+                      className="px-10 py-2.5 bg-spotify-green text-black rounded-full font-bold uppercase text-xs hover:scale-105 transition-transform shadow-xl disabled:opacity-50 disabled:scale-100"
+                    >
+                      {saving ? 'Saving...' : 'Save Source'}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

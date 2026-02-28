@@ -2,12 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"homemusic-server/internal/db"
+	"homemusic-server/internal/scanner"
 	"homemusic-server/internal/sources"
 	"homemusic-server/internal/types"
 )
@@ -17,8 +19,40 @@ func RegisterSourceRoutes(r chi.Router) {
 	r.Post("/sources", handleCreateSource)
 	r.Get("/sources/{id}", handleGetSource)
 	r.Delete("/sources/{id}", handleDeleteSource)
+	r.Post("/sources/{id}/scan", handleScanSource)
+	r.Post("/scan", handleScanAll)
 	r.Get("/sources/{id}/status", handleGetSourceStatus)
 	r.Post("/smb/enumerate-shares", handleEnumerateShares)
+	r.Get("/discover", handleDiscover)
+}
+
+func handleScanAll(w http.ResponseWriter, r *http.Request) {
+	if err := scanner.ScanAllSources(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Scan started for all enabled sources"})
+}
+
+func handleDiscover(w http.ResponseWriter, r *http.Request) {
+	// Placeholder for mDNS discovery
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte("[]"))
+}
+
+func handleScanSource(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	
+	// Run scan in background
+	go func() {
+		if err := scanner.ScanSource(id); err != nil {
+			log.Printf("[API] Scan failed for source %s: %v", id, err)
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Scan started"})
 }
 
 func handleGetSources(w http.ResponseWriter, r *http.Request) {

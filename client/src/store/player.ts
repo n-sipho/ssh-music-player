@@ -74,6 +74,11 @@ interface PlayerState {
   setDuration: (duration: number) => void;
   playTrack: (track: Track, queue?: Track[]) => void;
   clearTracksBySource: (sourceId: string) => void;
+
+  // Notification
+  notification: { message: string; type: 'success' | 'error' | 'info'; visible: boolean };
+  showNotification: (message: string, type?: 'success' | 'error' | 'info') => void;
+  hideNotification: () => void;
 }
 
 export const usePlayer = create<PlayerState>()(
@@ -236,6 +241,19 @@ export const usePlayer = create<PlayerState>()(
           }
         }
       },
+
+      notification: { message: '', type: 'info', visible: false },
+      showNotification: (message, type = 'info') => {
+        set({ notification: { message, type, visible: true } });
+        
+        // Only auto-hide for success and info messages
+        if (type !== 'error') {
+          setTimeout(() => get().hideNotification(), 5000);
+        }
+      },
+      hideNotification: () => set((state) => ({ 
+        notification: { ...state.notification, visible: false } 
+      })),
     }),
     {
       name: 'homemusic-player-v1',

@@ -15,15 +15,20 @@ interface ArtistDetail extends Artist {
   topTracks: Track[];
 }
 
-export default function Artists() {
+export default function Artists({ hasSources }: { hasSources: boolean | null }) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [selectedArtist, setSelectedArtist] = useState<ArtistDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const { playTrack } = usePlayer();
 
   useEffect(() => {
-    loadArtists();
-  }, []);
+    if (hasSources === null) return;
+    if (hasSources) {
+      loadArtists();
+    } else {
+      setLoading(false);
+    }
+  }, [hasSources]);
 
   const loadArtists = async () => {
     try {

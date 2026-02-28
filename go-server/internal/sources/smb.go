@@ -3,6 +3,7 @@ package sources
 import (
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/hirochachacha/go-smb2"
@@ -72,6 +73,20 @@ func (c *SMBClient) Close() {
 	if c.conn != nil {
 		c.conn.Close()
 	}
+}
+
+func (c *SMBClient) ReadDir(path string) ([]os.FileInfo, error) {
+	if c.share == nil {
+		return nil, fmt.Errorf("not connected to a share")
+	}
+	return c.share.ReadDir(path)
+}
+
+func (c *SMBClient) Open(path string) (*smb2.File, error) {
+	if c.share == nil {
+		return nil, fmt.Errorf("not connected to a share")
+	}
+	return c.share.Open(path)
 }
 
 func EnumerateShares(host, username, password, domain string) ([]string, error) {

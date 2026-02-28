@@ -38,6 +38,8 @@ func main() {
 
 	r.Route("/api", func(r chi.Router) {
 		api.RegisterSourceRoutes(r)
+		api.RegisterLibraryRoutes(r)
+		api.RegisterStreamRoutes(r)
 		
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("ok"))

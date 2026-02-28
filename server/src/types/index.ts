@@ -12,6 +12,7 @@ export const SourceSchema = z.object({
   port: z.preprocess((val) => (val === '' || val === null ? undefined : Number(val)), z.number().nullish()),
   username: z.string().nullish(),
   password: z.string().nullish(),
+  domain: z.string().nullish().default('.'),
   share: z.string().nullish(), // SMB only
   basePath: z.string().default('/'),
   enabled: z.boolean().default(true),

@@ -35,7 +35,14 @@ export const sourcesApi = {
   scanAll: () => api.post('/scan'),
   discover: () => api.get<any[]>('/discover'),
   getStatus: (id: string) => api.get<any>(`/sources/${id}/status`),
-  test: (id: string) => api.post<{ success: boolean; message?: string }>(`/sources/${id}/test`),
+  test: (source: string | Partial<Source>) => {
+    if (typeof source === 'string') {
+      return api.post<{ success: boolean; message?: string }>(`/sources/${source}/test`);
+    }
+    return api.post<{ success: boolean; message?: string }>('/sources/test', source);
+  },
+  enumerateShares: (data: { host: string; username?: string; password?: string; domain?: string }) => 
+    api.post<string[]>('/smb/enumerate-shares', data),
 };
 
 export const playlistsApi = {
