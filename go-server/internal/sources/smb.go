@@ -2,9 +2,11 @@ package sources
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hirochachacha/go-smb2"
 )
@@ -90,7 +92,12 @@ func (c *SMBClient) Open(path string) (*smb2.File, error) {
 }
 
 func EnumerateShares(host, username, password, domain string) ([]string, error) {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:445", host))
+	addr := host
+	if !strings.Contains(addr, ":") {
+		addr = addr + ":445"
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial: %w", err)
 	}
@@ -104,6 +111,8 @@ func EnumerateShares(host, username, password, domain string) ([]string, error) 
 		},
 	}
 
+	log.Printf("[SMB] Dialing %s with user=%s, domain=%s", addr, username, domain)
+	
 	s, err := d.Dial(conn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to authenticate: %w", err)

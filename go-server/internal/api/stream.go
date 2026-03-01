@@ -3,6 +3,7 @@ package api
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"homemusic-server/internal/db"
@@ -32,23 +33,33 @@ func handleStreamTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clean path for SMB
+	cleanPath := track.Path
+	if source.Type == types.SourceTypeSMB {
+		cleanPath = strings.TrimPrefix(cleanPath, "/")
+		cleanPath = strings.TrimPrefix(cleanPath, "\\")
+		if cleanPath == "" {
+			cleanPath = "."
+		}
+	}
+
 	var reader io.ReadSeeker
 	var closeFunc func()
 
 	if source.Type == types.SourceTypeSMB {
 		client := sources.NewSMBClient(sources.SMBConfig{
 			Host:     source.Host,
-			Share:    *source.Share,
-			Username: *source.Username,
-			Password: *source.Password,
-			Domain:   *source.Domain,
+			Share:    getString(source.Share),
+			Username: getString(source.Username),
+			Password: getString(source.Password),
+			Domain:   getString(source.Domain),
 		})
 		if err := client.Connect(); err != nil {
 			http.Error(w, "Failed to connect to SMB: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		
-		f, err := client.Open(track.Path)
+		f, err := client.Open(cleanPath)
 		if err != nil {
 			client.Close()
 			http.Error(w, "Failed to open remote file: "+err.Error(), http.StatusInternalServerError)
@@ -64,15 +75,15 @@ func handleStreamTrack(w http.ResponseWriter, r *http.Request) {
 		client := sources.NewSSHClient(sources.SSHConfig{
 			Host:     source.Host,
 			Port:     source.Port,
-			Username: *source.Username,
-			Password: *source.Password,
+			Username: getString(source.Username),
+			Password: getString(source.Password),
 		})
 		if err := client.Connect(); err != nil {
 			http.Error(w, "Failed to connect to SSH: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		
-		f, err := client.Open(track.Path)
+		f, err := client.Open(cleanPath)
 		if err != nil {
 			client.Close()
 			http.Error(w, "Failed to open remote file: "+err.Error(), http.StatusInternalServerError)

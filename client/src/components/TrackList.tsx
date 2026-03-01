@@ -10,9 +10,9 @@ export default function TrackList({ tracks }: TrackListProps) {
   const { playTrack, currentTrack, addToQueue } = usePlayer();
 
   const formatDuration = (seconds?: number) => {
-    if (!seconds) return '--:--';
+    if (!seconds || seconds <= 0) return '--:--';
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
@@ -31,7 +31,7 @@ export default function TrackList({ tracks }: TrackListProps) {
         <span>#</span>
         <span>Title</span>
         <span>Album</span>
-        <span>Artist</span>
+        {/* <span>Artist</span> */}
         <span className="text-right">Duration</span>
       </div>
 
@@ -68,15 +68,15 @@ export default function TrackList({ tracks }: TrackListProps) {
                 <p className={`text-sm ${currentTrack?.id === track.id ? 'text-spotify-green' : 'text-white'}`}>
                   {track.title}
                 </p>
-                <p className="text-xs text-spotify-gray">{track.artist?.name || 'Unknown'}</p>
+               <p className="text-xs text-spotify-gray">{track.artistsDisplay || track.artist || track.artistObj?.name || 'Unknown'}</p>
               </div>
             </div>
             <span className="text-sm text-spotify-gray self-center">
-              {track.album?.name || '--'}
+              {track.album || track.albumObj?.name || '--'}
             </span>
-            <span className="text-sm text-spotify-gray self-center">
-              {track.artist?.name || 'Unknown'}
-            </span>
+            {/* <span className="text-sm text-spotify-gray self-center">
+              {track.artistsDisplay || track.artist || track.artistObj?.name || 'Unknown'}
+            </span> */}
             <span className="text-sm text-spotify-gray self-center text-right">
               {formatDuration(track.duration)}
             </span>

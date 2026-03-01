@@ -15,14 +15,17 @@ export interface Album {
 export interface Track {
   id: string;
   title: string;
-  artist?: Artist;
-  album?: Album;
+  artist?: string; // Support flat string from Go
+  album?: string;  // Support flat string from Go
+  artistObj?: Artist; // Rename original nested objects to avoid conflict
+  albumObj?: Album;
   trackNumber?: number;
   duration?: number;
   format?: string;
   size?: number;
   sourceId: string;
   imageUrl?: string;
+  sourceMtime?: string;
 }
 
 export interface Source {
@@ -33,6 +36,7 @@ export interface Source {
   port?: number;
   username?: string;
   password?: string;
+  domain?: string;
   share?: string;
   basePath: string;
   enabled: boolean;

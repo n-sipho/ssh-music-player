@@ -135,7 +135,10 @@ export default function Player() {
 
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLAudioElement>) => {
     setDuration(e.currentTarget.duration);
-    // Restore saved position on initial load
+  };
+
+  const handleLoadedData = (e: React.SyntheticEvent<HTMLAudioElement>) => {
+    // Restore saved position on page reload
     if (currentTime > 0 && e.currentTarget.currentTime === 0) {
       e.currentTarget.currentTime = currentTime;
     }
@@ -152,6 +155,7 @@ export default function Player() {
           src={currentTrack ? getStreamUrl(currentTrack.id) : undefined}
           onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
           onLoadedMetadata={handleLoadedMetadata}
+          onLoadedData={handleLoadedData}
           onEnded={() => {
             if (currentIndex < queue.length - 1) {
               playNext();
@@ -178,7 +182,7 @@ export default function Player() {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-white truncate">{currentTrack?.title || 'No track selected'}</p>
             <p className="text-xs text-spotify-gray truncate">
-              {currentTrack?.artist?.name || 'Unknown Artist'}
+              {currentTrack?.artistsDisplay || currentTrack?.artist || currentTrack?.artistObj?.name || 'Unknown Artist'}
             </p>
           </div>
         </div>

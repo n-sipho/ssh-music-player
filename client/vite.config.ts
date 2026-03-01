@@ -4,7 +4,10 @@ import tailwindcss from 'tailwindcss'
 import autoprefixer from 'autoprefixer'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+  ],
+  appType: 'spa',
   css: {
     postcss: {
       plugins: [tailwindcss(), autoprefixer()],

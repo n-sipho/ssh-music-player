@@ -12,7 +12,9 @@ var DB *sql.DB
 
 func InitDB(dbPath string) error {
 	var err error
-	DB, err = sql.Open("sqlite", dbPath)
+	// Add WAL mode and busy timeout to the connection string
+	dsn := fmt.Sprintf("%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
+	DB, err = sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -21,7 +23,7 @@ func InitDB(dbPath string) error {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
-	log.Println("🗄️  Database initialized and tables verified")
+	log.Println("🗄️  Database initialized (WAL mode enabled)")
 	return nil
 }
 
@@ -79,6 +81,10 @@ func createTables() error {
 		track_number INTEGER,
 		year INTEGER,
 		path TEXT NOT NULL,
+		folder_path TEXT,
+		image_url TEXT,
+		source_mtime DATETIME,
+		artists_display TEXT,
 		source_id TEXT NOT NULL,
 		album_id TEXT,
 		artist_id TEXT,
@@ -107,5 +113,15 @@ func createTables() error {
 	);
 	`
 	_, err := DB.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Manual migration for existing databases
+	_, _ = DB.Exec("ALTER TABLE tracks ADD COLUMN folder_path TEXT")
+	_, _ = DB.Exec("ALTER TABLE tracks ADD COLUMN image_url TEXT")
+	_, _ = DB.Exec("ALTER TABLE tracks ADD COLUMN source_mtime DATETIME")
+	_, _ = DB.Exec("ALTER TABLE tracks ADD COLUMN artists_display TEXT")
+	
+	return nil
 }

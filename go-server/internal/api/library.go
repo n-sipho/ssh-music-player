@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,14 +15,42 @@ func RegisterLibraryRoutes(r chi.Router) {
 	r.Get("/albums/{id}", handleGetAlbum)
 	r.Get("/artists", handleGetArtists)
 	r.Get("/artists/{id}", handleGetArtist)
+	r.Get("/folders", handleGetFolders)
+	r.Get("/folders/tracks", handleGetTracksByFolder)
+}
+
+func handleGetFolders(w http.ResponseWriter, r *http.Request) {
+	folders, err := db.GetFolders()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(folders)
+}
+
+func handleGetTracksByFolder(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "Path is required", http.StatusBadRequest)
+		return
+	}
+
+	tracks, err := db.GetTracksByFolder(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(tracks)
 }
 
 func handleGetTracks(w http.ResponseWriter, r *http.Request) {
 	tracks, err := db.GetAllTracks()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[API] Failed to get tracks: %v", err)
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tracks)
 }
 

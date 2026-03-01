@@ -1,15 +1,18 @@
 package scanner
 
 import (
+	"crypto/md5"
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/dhowden/tag"
 	"github.com/google/uuid"
+	"github.com/tcolgate/mp3"
 	"homemusic-server/internal/db"
 	"homemusic-server/internal/sources"
 	"homemusic-server/internal/types"
@@ -29,6 +32,18 @@ func isMusicFile(filename string) bool {
 	return musicExtensions[ext]
 }
 
+type musicFile struct {
+	path  string
+	mtime time.Time
+}
+
+func getString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 func ScanSource(sourceID string) error {
 	source, err := db.GetSource(sourceID)
 	if err != nil {
@@ -41,7 +56,7 @@ func ScanSource(sourceID string) error {
 	log.Printf("[Scanner] Starting scan for source: %s", source.Name)
 	updateStatus(sourceID, "scanning", 0, 0, 0, nil)
 
-	var musicFiles []string
+	var musicFiles []musicFile
 	var scanErr error
 
 	var smbClient *sources.SMBClient
@@ -50,16 +65,16 @@ func ScanSource(sourceID string) error {
 	if source.Type == types.SourceTypeSMB {
 		smbClient = sources.NewSMBClient(sources.SMBConfig{
 			Host:     source.Host,
-			Share:    *source.Share,
-			Username: *source.Username,
-			Password: *source.Password,
-			Domain:   *source.Domain,
+			Share:    getString(source.Share),
+			Username: getString(source.Username),
+			Password: getString(source.Password),
+			Domain:   getString(source.Domain),
 		})
 		if err := smbClient.Connect(); err != nil {
 			scanErr = err
 		} else {
 			defer smbClient.Close()
-			basePath := "\\"
+			basePath := "."
 			if source.BasePath != nil && *source.BasePath != "" {
 				basePath = *source.BasePath
 			}
@@ -69,8 +84,8 @@ func ScanSource(sourceID string) error {
 		sshClient = sources.NewSSHClient(sources.SSHConfig{
 			Host:     source.Host,
 			Port:     source.Port,
-			Username: *source.Username,
-			Password: *source.Password,
+			Username: getString(source.Username),
+			Password: getString(source.Password),
 		})
 		if err := sshClient.Connect(); err != nil {
 			scanErr = err
@@ -94,28 +109,58 @@ func ScanSource(sourceID string) error {
 	log.Printf("[Scanner] Found %d music files in %s", total, source.Name)
 	updateStatus(sourceID, "scanning", 5, total, 0, nil)
 
-	for i, path := range musicFiles {
+	for i, mf := range musicFiles {
 		processed := i + 1
+		path := mf.path
+		log.Printf("[Scanner] Processing (%d/%d): %s", processed, total, path)
 		
 		var reader io.ReadSeeker
 		if source.Type == types.SourceTypeSMB {
 			f, err := smbClient.Open(path)
-			if err == nil {
+			if err != nil {
+				log.Printf("[Scanner] Failed to open SMB file %s: %v", path, err)
+			} else {
 				defer f.Close()
 				reader = f
 			}
 		} else {
 			f, err := sshClient.Open(path)
-			if err == nil {
+			if err != nil {
+				log.Printf("[Scanner] Failed to open SSH file %s: %v", path, err)
+			} else {
 				defer f.Close()
 				reader = f
 			}
 		}
 
 		if reader != nil {
+			// Try to calculate duration for MP3
+			duration := 0.0
+			if strings.ToLower(filepath.Ext(path)) == ".mp3" {
+				d := mp3.NewDecoder(reader)
+				var f mp3.Frame
+				var skipped int
+				for {
+					if err := d.Decode(&f, &skipped); err != nil {
+						if err == io.EOF {
+							break
+						}
+						break
+					}
+					duration += f.Duration().Seconds()
+				}
+				// Reset reader for metadata extraction
+				if seeker, ok := reader.(io.Seeker); ok {
+					seeker.Seek(0, io.SeekStart)
+				}
+			}
+
 			metadata, err := tag.ReadFrom(reader)
-			if err == nil {
-				upsertMetadata(sourceID, path, metadata)
+			if err != nil {
+				log.Printf("[Scanner] Failed to extract metadata for %s: %v", path, err)
+				upsertBasicInfo(sourceID, path, mf.mtime, duration)
+			} else {
+				upsertMetadata(sourceID, path, metadata, mf.mtime, duration)
 			}
 		}
 
@@ -132,12 +177,27 @@ func ScanSource(sourceID string) error {
 	return nil
 }
 
-func upsertMetadata(sourceID, path string, metadata tag.Metadata) {
-	artistName := "Unknown Artist"
-	if metadata.Artist() != "" {
-		artistName = metadata.Artist()
+func upsertMetadata(sourceID, path string, metadata tag.Metadata, mtime time.Time, duration float64) {
+	artistTag := metadata.Artist()
+	if artistTag == "" {
+		artistTag = "Unknown Artist"
 	}
 
+	// Split by common separators and take the first one as primary
+	// Examples: "Artist A / Artist B", "Artist A; Artist B"
+	primaryArtist := artistTag
+	separators := []string{" / ", "/", "; ", ";", ", "}
+	for _, sep := range separators {
+		if strings.Contains(primaryArtist, sep) {
+			parts := strings.Split(primaryArtist, sep)
+			if len(parts) > 0 {
+				primaryArtist = strings.TrimSpace(parts[0])
+				break
+			}
+		}
+	}
+
+	artistName := primaryArtist
 	albumName := "Unknown Album"
 	if metadata.Album() != "" {
 		albumName = metadata.Album()
@@ -148,6 +208,34 @@ func upsertMetadata(sourceID, path string, metadata tag.Metadata) {
 		title = metadata.Title()
 	}
 
+	folderPath := filepath.Dir(path)
+	
+	// Create display artist string (comma separated)
+	displayArtist := artistTag
+	separators = []string{" / ", "/", "; ", ";"}
+	for _, sep := range separators {
+		if strings.Contains(displayArtist, sep) {
+			displayArtist = strings.ReplaceAll(displayArtist, sep, ", ")
+		}
+	}
+
+	// 1. Handle Artwork
+	artworkURL := ""
+	if p := metadata.Picture(); p != nil {
+		hash := md5.Sum([]byte(artistName + albumName))
+		filename := fmt.Sprintf("%x.%s", hash, p.Ext)
+		savePath := filepath.Join("public", "art", filename)
+		
+		if _, err := os.Stat(savePath); os.IsNotExist(err) {
+			os.MkdirAll(filepath.Dir(savePath), 0755)
+			if err := os.WriteFile(savePath, p.Data, 0644); err == nil {
+				artworkURL = "/api/art/" + filename
+			}
+		} else {
+			artworkURL = "/api/art/" + filename
+		}
+	}
+
 	artistID := uuid.New().String()
 	_, err := db.DB.Exec("INSERT OR IGNORE INTO artists (id, name) VALUES (?, ?)", artistID, artistName)
 	if err == nil {
@@ -155,22 +243,51 @@ func upsertMetadata(sourceID, path string, metadata tag.Metadata) {
 	}
 
 	albumID := uuid.New().String()
-	_, err = db.DB.Exec("INSERT OR IGNORE INTO albums (id, name, artist_id) VALUES (?, ?, ?)", albumID, albumName, artistID)
-	if err == nil {
+	_, err = db.DB.Exec("INSERT OR IGNORE INTO albums (id, name, artist_id, image_url) VALUES (?, ?, ?, ?)", albumID, albumName, artistID, artworkURL)
+	if err != nil {
+		if artworkURL != "" {
+			db.DB.Exec("UPDATE albums SET image_url = ? WHERE name = ? AND artist_id = ? AND (image_url IS NULL OR image_url = '')", artworkURL, albumName, artistID)
+		}
 		db.DB.QueryRow("SELECT id FROM albums WHERE name = ? AND artist_id = ?", albumName, artistID).Scan(&albumID)
 	}
 
 	trackID := uuid.New().String()
 	trackNum, _ := metadata.Track()
 	year := metadata.Year()
-	
-	// Get duration if possible, some formats might not provide it via tag reader easily
-	duration := 0.0 
 
 	_, err = db.DB.Exec(`INSERT OR REPLACE INTO tracks 
-		(id, title, artist, album, duration, track_number, year, path, source_id, album_id, artist_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		trackID, title, artistName, albumName, duration, trackNum, year, path, sourceID, albumID, artistID)
+		(id, title, artist, album, duration, track_number, year, path, folder_path, image_url, source_mtime, artists_display, source_id, album_id, artist_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		trackID, title, artistName, albumName, duration, trackNum, year, path, folderPath, artworkURL, mtime, displayArtist, sourceID, albumID, artistID)
+	
+	if err != nil {
+		log.Printf("[Scanner] Database error for %s: %v", path, err)
+	}
+}
+
+func upsertBasicInfo(sourceID, path string, mtime time.Time, duration float64) {
+	artistName := "Unknown Artist"
+	albumName := "Unknown Album"
+	title := filepath.Base(path)
+	folderPath := filepath.Dir(path)
+
+	artistID := uuid.New().String()
+	_, _ = db.DB.Exec("INSERT OR IGNORE INTO artists (id, name) VALUES (?, ?)", artistID, artistName)
+	db.DB.QueryRow("SELECT id FROM artists WHERE name = ?", artistName).Scan(&artistID)
+
+	albumID := uuid.New().String()
+	_, _ = db.DB.Exec("INSERT OR IGNORE INTO albums (id, name, artist_id) VALUES (?, ?, ?)", albumID, albumName, artistID)
+	db.DB.QueryRow("SELECT id FROM albums WHERE name = ? AND artist_id = ?", albumName, artistID).Scan(&albumID)
+
+	trackID := uuid.New().String()
+	_, err := db.DB.Exec(`INSERT OR REPLACE INTO tracks 
+		(id, title, artist, album, duration, path, folder_path, source_mtime, artists_display, source_id, album_id, artist_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		trackID, title, artistName, albumName, duration, path, folderPath, mtime, artistName, sourceID, albumID, artistID)
+	
+	if err != nil {
+		log.Printf("[Scanner] Database error (basic) for %s: %v", path, err)
+	}
 }
 
 func updateStatus(sourceID string, status string, progress float64, total, scanned int, lastErr *string) {
@@ -183,26 +300,46 @@ func updateStatus(sourceID string, status string, progress float64, total, scann
 	}
 }
 
-func walkSMB(client *sources.SMBClient, path string, files *[]string) error {
-	entries, err := client.ReadDir(path)
+func walkSMB(client *sources.SMBClient, path string, files *[]musicFile) error {
+	// Clean the path for go-smb2: remove leading slashes and use backslashes internally if needed
+	// But go-smb2 usually likes '.' for root and 'Folder/Subfolder' for children
+	smbPath := strings.TrimPrefix(path, "/")
+	smbPath = strings.TrimPrefix(smbPath, "\\")
+	if smbPath == "" {
+		smbPath = "."
+	}
+
+	log.Printf("[Scanner] Walking SMB path: %s (internal: %s)", path, smbPath)
+	entries, err := client.ReadDir(smbPath)
 	if err != nil {
-		log.Printf("[Scanner] Error reading SMB dir %s: %v", path, err)
+		log.Printf("[Scanner] Error reading SMB dir %s: %v", smbPath, err)
 		return err
 	}
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "." || name == ".." || strings.HasPrefix(name, "._") {
+		if name == "." || name == ".." || strings.HasPrefix(name, "._") || strings.HasPrefix(name, "$") {
 			continue
 		}
 
-		fullPath := filepath.Join(path, name)
+		// Construct the path for the NEXT level
+		var nextPath string
+		if smbPath == "." {
+			nextPath = name
+		} else {
+			nextPath = smbPath + "/" + name
+		}
+
 		if entry.IsDir() {
-			if err := walkSMB(client, fullPath, files); err != nil {
+			if err := walkSMB(client, nextPath, files); err != nil {
 				return err
 			}
 		} else if isMusicFile(name) {
-			*files = append(*files, fullPath)
+			log.Printf("[Scanner] Found music file: %s", nextPath)
+			*files = append(*files, musicFile{
+				path:  nextPath,
+				mtime: entry.ModTime(),
+			})
 		}
 	}
 
@@ -216,19 +353,21 @@ func ScanAllSources() error {
 	}
 
 	for _, s := range sources {
-		if s.Enabled {
+		enabled, ok := s["enabled"].(bool)
+		if ok && enabled {
+			id := s["id"].(string)
 			// Run each scan in its own goroutine
-			go func(id string) {
-				if err := ScanSource(id); err != nil {
-					log.Printf("[Scanner] Background scan failed for %s: %v", id, err)
+			go func(sourceID string) {
+				if err := ScanSource(sourceID); err != nil {
+					log.Printf("[Scanner] Background scan failed for %s: %v", sourceID, err)
 				}
-			}(s.ID)
+			}(id)
 		}
 	}
 	return nil
 }
 
-func walkSSH(client *sources.SSHClient, path string, files *[]string) error {
+func walkSSH(client *sources.SSHClient, path string, files *[]musicFile) error {
 	entries, err := client.ReadDir(path)
 	if err != nil {
 		log.Printf("[Scanner] Error reading SSH dir %s: %v", path, err)
@@ -247,7 +386,10 @@ func walkSSH(client *sources.SSHClient, path string, files *[]string) error {
 				return err
 			}
 		} else if isMusicFile(name) {
-			*files = append(*files, fullPath)
+			*files = append(*files, musicFile{
+				path:  fullPath,
+				mtime: entry.ModTime(),
+			})
 		}
 	}
 

@@ -60,6 +60,10 @@ type Track struct {
 	TrackNumber *int      `json:"trackNumber,omitempty" db:"track_number"`
 	Year        *int      `json:"year,omitempty" db:"year"`
 	Path        string    `json:"path" db:"path"`
+	FolderPath  *string   `json:"folderPath,omitempty" db:"folder_path"`
+	ImageUrl    *string   `json:"imageUrl,omitempty" db:"image_url"`
+	SourceMtime *time.Time `json:"sourceMtime,omitempty" db:"source_mtime"`
+	ArtistsDisplay *string `json:"artistsDisplay,omitempty" db:"artists_display"`
 	SourceID    string    `json:"sourceId" db:"source_id"`
 	AlbumID     *string   `json:"albumId,omitempty" db:"album_id"`
 	ArtistID    *string   `json:"artistId,omitempty" db:"artist_id"`

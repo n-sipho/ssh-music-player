@@ -2,11 +2,20 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"homemusic-server/internal/types"
 )
 
 func GetAllArtists() ([]types.Artist, error) {
-	rows, err := DB.Query("SELECT id, name, created_at FROM artists ORDER BY name ASC")
+	// Group by name to collapse duplicates and only show artists with tracks
+	query := `
+		SELECT a.id, a.name, a.created_at 
+		FROM artists a
+		JOIN tracks t ON a.id = t.artist_id
+		GROUP BY UPPER(TRIM(a.name))
+		ORDER BY a.name ASC
+	`
+	rows, err := DB.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +117,7 @@ func GetAlbum(id string) (map[string]interface{}, error) {
 }
 
 func GetAllTracks() ([]types.Track, error) {
-	rows, err := DB.Query("SELECT id, title, artist, album, duration, track_number, year, path, source_id, album_id, artist_id, created_at FROM tracks ORDER BY created_at DESC")
+	rows, err := DB.Query("SELECT id, title, artist, album, duration, track_number, year, path, folder_path, image_url, source_mtime, artists_display, source_id, album_id, artist_id, created_at FROM tracks ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +126,7 @@ func GetAllTracks() ([]types.Track, error) {
 	tracks := []types.Track{}
 	for rows.Next() {
 		var t types.Track
-		err := rows.Scan(&t.ID, &t.Title, &t.Artist, &t.Album, &t.Duration, &t.TrackNumber, &t.Year, &t.Path, &t.SourceID, &t.AlbumID, &t.ArtistID, &t.CreatedAt)
+		err := rows.Scan(&t.ID, &t.Title, &t.Artist, &t.Album, &t.Duration, &t.TrackNumber, &t.Year, &t.Path, &t.FolderPath, &t.ImageUrl, &t.SourceMtime, &t.ArtistsDisplay, &t.SourceID, &t.AlbumID, &t.ArtistID, &t.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +136,7 @@ func GetAllTracks() ([]types.Track, error) {
 }
 
 func GetTracksByAlbum(albumID string) ([]types.Track, error) {
-	rows, err := DB.Query("SELECT id, title, artist, album, duration, track_number, year, path, source_id, album_id, artist_id, created_at FROM tracks WHERE album_id = ? ORDER BY track_number ASC", albumID)
+	rows, err := DB.Query("SELECT id, title, artist, album, duration, track_number, year, path, folder_path, image_url, source_mtime, artists_display, source_id, album_id, artist_id, created_at FROM tracks WHERE album_id = ? ORDER BY track_number ASC", albumID)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +145,67 @@ func GetTracksByAlbum(albumID string) ([]types.Track, error) {
 	tracks := []types.Track{}
 	for rows.Next() {
 		var t types.Track
-		err := rows.Scan(&t.ID, &t.Title, &t.Artist, &t.Album, &t.Duration, &t.TrackNumber, &t.Year, &t.Path, &t.SourceID, &t.AlbumID, &t.ArtistID, &t.CreatedAt)
+		err := rows.Scan(&t.ID, &t.Title, &t.Artist, &t.Album, &t.Duration, &t.TrackNumber, &t.Year, &t.Path, &t.FolderPath, &t.ImageUrl, &t.SourceMtime, &t.ArtistsDisplay, &t.SourceID, &t.AlbumID, &t.ArtistID, &t.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, t)
+	}
+	return tracks, nil
+}
+
+func GetFolders() ([]map[string]interface{}, error) {
+	query := `
+		SELECT folder_path, COUNT(id) as track_count
+		FROM tracks
+		WHERE folder_path IS NOT NULL
+		GROUP BY folder_path
+		ORDER BY folder_path ASC
+	`
+	rows, err := DB.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	folders := []map[string]interface{}{}
+	for rows.Next() {
+		var path string
+		var count int
+		if err := rows.Scan(&path, &count); err != nil {
+			return nil, err
+		}
+		
+		// Find a sample track from this folder to get an image
+		var imageUrl sql.NullString
+		DB.QueryRow(`
+			SELECT COALESCE(t.image_url, a.image_url) 
+			FROM tracks t 
+			LEFT JOIN albums a ON t.album_id = a.id 
+			WHERE t.folder_path = ? AND (t.image_url IS NOT NULL OR a.image_url IS NOT NULL) 
+			LIMIT 1`, path).Scan(&imageUrl)
+
+		folders = append(folders, map[string]interface{}{
+			"id":         path,
+			"name":       filepath.Base(path),
+			"trackCount": count,
+			"imageUrl":   imageUrl.String,
+		})
+	}
+	return folders, nil
+}
+
+func GetTracksByFolder(path string) ([]types.Track, error) {
+	rows, err := DB.Query("SELECT id, title, artist, album, duration, track_number, year, path, folder_path, image_url, source_mtime, artists_display, source_id, album_id, artist_id, created_at FROM tracks WHERE folder_path = ? ORDER BY track_number ASC, title ASC", path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tracks := []types.Track{}
+	for rows.Next() {
+		var t types.Track
+		err := rows.Scan(&t.ID, &t.Title, &t.Artist, &t.Album, &t.Duration, &t.TrackNumber, &t.Year, &t.Path, &t.FolderPath, &t.ImageUrl, &t.SourceMtime, &t.ArtistsDisplay, &t.SourceID, &t.AlbumID, &t.ArtistID, &t.CreatedAt)
 		if err != nil {
 			return nil, err
 		}

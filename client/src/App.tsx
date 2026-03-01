@@ -17,33 +17,22 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Initial source check - only on mount
   useEffect(() => {
-    const checkInitialState = async () => {
+    const init = async () => {
       try {
-        const sourcesRes = await sourcesApi.getAll();
-        const sources = sourcesRes.data || [];
-        const exists = sources.length > 0;
+        const res = await sourcesApi.getAll();
+        const exists = res.data && res.data.length > 0;
         setHasSources(exists);
 
-        if (!exists && location.pathname !== '/settings') {
+        if (!exists && location.pathname === '/') {
           navigate('/settings');
-          return;
-        }
-
-        // If we have sources but no tracks, trigger a scan
-        const tracksRes = await fetch('/api/tracks').then(r => r.json());
-        if (exists && tracksRes.length === 0) {
-           sourcesApi.scanAll();
         }
       } catch (err) {
-        console.error('Initial check failed:', err);
         setHasSources(false);
       }
     };
-    
-    checkInitialState();
-  }, []); // Only once on mount
+    init();
+  }, []);
 
   // Poll only if NO sources exist, to detect when one is added
   useEffect(() => {

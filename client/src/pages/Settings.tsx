@@ -85,21 +85,35 @@ export default function Settings() {
     return () => clearInterval(interval);
   }, []);
 
-  // Real-time UI polling - only when a source is actually scanning
+  // Real-time UI polling - when a source is scanning OR we just clicked Scan All
   useEffect(() => {
-    const anyScanning = sources.some(s => s.status?.status === 'scanning');
-    if (!anyScanning) return;
+    let interval: any;
+    
+    const startPolling = () => {
+      interval = setInterval(async () => {
+        try {
+          const res = await sourcesApi.getAll();
+          setSources(res.data);
+          
+          // If nothing is scanning and we aren't in the initial "Scan All" window, stop
+          const anyScanning = res.data.some((s: any) => s.status?.status === 'scanning');
+          if (!anyScanning && !scanningAll) {
+            clearInterval(interval);
+          }
+        } catch { /* silent fail */ }
+      }, 500);
+    };
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await sourcesApi.getAll();
-        setSources(res.data);
-      } catch { /* silent fail */ }
-    }, 4000);
+    const isAnyScanning = sources.some(s => s.status?.status === 'scanning');
+    if (isAnyScanning || scanningAll) {
+      startPolling();
+    }
 
-    return () => clearInterval(interval);
-  }, [sources]);
-  
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [scanningAll, sources.length]); // Re-run when scan starts or source count changes
+
   const saveSource = async () => {
     if (!editing) return;
     setSaving(true);
@@ -188,7 +202,7 @@ export default function Settings() {
         host: editing.host,
         username: editing.username || '',
         password: editing.password || '',
-        domain: editing.domain || '.',
+        domain: editing.domain || '',
       });
       
       const shares = res.data;
@@ -223,7 +237,7 @@ export default function Settings() {
       console.error('Scan all failed:', err);
       showNotification('Failed to start scan', 'error');
     } finally {
-      setTimeout(() => setScanningAll(false), 2000);
+      setTimeout(() => setScanningAll(false), 10000);
     }
   };
 
