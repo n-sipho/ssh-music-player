@@ -1,4 +1,9 @@
 node_modules
-library.db
+*.db
+*.db-shm
+*.db-wal
+go-server/tmp
 public
 dist
+.env
+.DS_Store
